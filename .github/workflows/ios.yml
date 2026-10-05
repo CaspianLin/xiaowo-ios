@@ -1,0 +1,86 @@
+name: ios
+
+# Manual trigger only. Source is pulled from a private repo with a read-only deploy key;
+# build outputs (simulator screenshot, unsigned ipa, log tail) are posted to a private endpoint,
+# never uploaded as public artifacts.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: CaspianLin/xiaowo-kmp
+          ssh-key: ${{ secrets.KMP_DEPLOY_KEY }}
+          path: kmp
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Kotlin frameworks
+        working-directory: kmp
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace :shared:linkDebugFrameworkIosSimulatorArm64 :shared:linkReleaseFrameworkIosArm64 2>&1 | tee ../build.log
+
+      - name: Xcode project
+        working-directory: kmp/iosApp
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Simulator build
+        working-directory: kmp/iosApp
+        run: |
+          set -o pipefail
+          xcodebuild -project iosApp.xcodeproj -scheme iosApp -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath dd ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a ../../build.log | tail -30
+
+      - name: Screenshot
+        run: |
+          set -e
+          APP=$(find kmp/iosApp/dd/Build/Products -maxdepth 2 -name '*.app' -path '*iphonesimulator*' | head -1)
+          BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin)['devices'];print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')))")
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$BID"
+          sleep 15
+          xcrun simctl io "$UDID" screenshot shot.png
+
+      - name: Device build (unsigned ipa)
+        working-directory: kmp/iosApp
+        run: |
+          set -o pipefail
+          xcodebuild -project iosApp.xcodeproj -scheme iosApp -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath dd2 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee -a ../../build.log | tail -30
+          APP=$(find dd2/Build/Products -maxdepth 2 -name '*.app' -path '*iphoneos*' | head -1)
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry ../../app.ipa Payload
+          ls -la ../../app.ipa
+
+      - name: Drop
+        if: always()
+        env:
+          DROP_URL: ${{ secrets.DROP_URL }}
+          DROP_TOKEN: ${{ secrets.DROP_TOKEN }}
+        run: |
+          SHA=$(git -C kmp rev-parse --short HEAD 2>/dev/null || echo x)
+          RUN=${{ github.run_number }}
+          drop() { [ -f "$1" ] && curl -sS -X POST "$DROP_URL?name=$2" -H "x-drop-token: $DROP_TOKEN" -H 'Content-Type: application/octet-stream' --data-binary @"$1" -o /dev/null -w "$2 %{http_code}\n" || true; }
+          tail -c 200000 build.log > log-tail.txt 2>/dev/null || true
+          drop shot.png "r$RUN-$SHA-shot.png"
+          drop app.ipa "r$RUN-$SHA-caspian.ipa"
+          drop log-tail.txt "r$RUN-$SHA-log.txt"
