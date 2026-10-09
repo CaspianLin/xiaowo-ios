@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26   # App Store Connect requires the iOS 26 SDK (Xcode 26); macos-15 defaults to Xcode 16 / iOS 18.5
     timeout-minutes: 75
     env:
       HAS_ASC_KEY: ${{ secrets.ASC_KEY_P8 != '' }}
@@ -19,6 +19,13 @@ jobs:
           ssh-key: ${{ secrets.KMP_DEPLOY_KEY }}
           path: kmp
 
+      - name: Xcode version
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$X" ] && sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,7 +33,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.14.3'
+          gradle-version: '8.14.4'
 
       - name: Kotlin frameworks
         working-directory: kmp
