@@ -5,6 +5,11 @@ name: ios
 # never uploaded as public artifacts.
 on:
   workflow_dispatch:
+    inputs:
+      testflight:
+        description: Upload to TestFlight
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -138,7 +143,7 @@ jobs:
       # TestFlight: individual App Store Connect API key (JWT sub=user, no issuer id). altool doesn't take
       # individual keys, so this goes through the Build Uploads REST API via the asc CLI. Skipped until the key exists.
       - name: TestFlight upload
-        if: env.HAS_ASC_KEY == 'true'
+        if: env.HAS_ASC_KEY == 'true' && inputs.testflight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
