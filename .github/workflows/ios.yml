@@ -72,6 +72,10 @@ jobs:
           xcrun simctl launch "$UDID" "$BID"
           sleep 15
           xcrun simctl io "$UDID" screenshot shot.png
+          # 闪退取证:进程还在不在 + 最近两分钟这个 App 的系统日志 + 崩溃报告,一起带回服务器
+          { echo "== alive? =="; xcrun simctl spawn "$UDID" launchctl list | grep -i "$BID" || echo "NOT RUNNING";
+            echo "== log =="; xcrun simctl spawn "$UDID" log show --last 2m --style compact --predicate 'process == "iosApp"' 2>/dev/null | grep -iE 'error|exception|fault|crash|terminat|missing' | tail -60;
+            echo "== crash reports =="; for f in $(ls -t ~/Library/Logs/DiagnosticReports/*iosApp* 2>/dev/null | head -2); do echo "--- $f"; head -120 "$f"; done; } > crash.txt 2>&1 || true
 
       - name: Device build (unsigned ipa)
         working-directory: kmp/iosApp
@@ -175,3 +179,4 @@ jobs:
           drop log-tail.txt "r$RUN-$SHA-log.txt"
           drop signed.ipa "r$RUN-$SHA-signed.ipa"
           drop testflight.txt "r$RUN-$SHA-testflight.txt"
+          drop crash.txt "r$RUN-$SHA-crash.txt"
